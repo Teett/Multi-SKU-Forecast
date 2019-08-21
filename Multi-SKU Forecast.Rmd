@@ -41,8 +41,6 @@ drive_get("https://docs.google.com/spreadsheets/d/1FAGHeqOF57_kVwAXtTXXu68dME8HQ
 ## Limpiando y posicionando la informaci
 
 ```{r }
-
-
 #Lectura de datos y cambio de nombre a formato más deseable
 data <- read_csv2("table.csv")
 dates_vector <- as.character(dmy(names(data)[c(-1,-2)]))
@@ -112,12 +110,3 @@ ggplot(agrupado_factor, aes(x = date, y = valor)) +
 geom_line() +
   facet_wrap_paginate(~codigo, ncol = 3, nrow = 5, scales = "free_y", page = 5)
 ```
-
-## Including Plots
-
-
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
