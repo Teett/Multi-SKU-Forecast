@@ -25,88 +25,143 @@ library(fable)
 library(broom)
 library(googledrive)
 library(googlesheets4)
+library(ggforce)
 ```
-
-
 
 ## Obtención de datos desde Google Drive
 
 ```{r}
-drive_get("https://docs.google.com/spreadsheets/d/1FAGHeqOF57_kVwAXtTXXu68dME8HQrp7pHm0pHsDhyY/edit#gid=1103857913") %>% 
-  read_sheet(range = "table!A1:AK250") %>%
-  mutate(e_sup = as.character(e_sup)) %>% 
-  filter(!is.na(fecha))
+raw_data <- drive_get("https://docs.google.com/spreadsheets/d/1FuvujfVA67WrZb7mTxvMYCRv2rrNwBhltr7IzBIvITk/edit#gid=773188988") %>% 
+  read_sheet(range = "sku_dataupdate!A1:AR250", col_types = "d") %>%
+  mutate(codigo = as.character(codigo),
+         codigo = as_factor(codigo))
+
+raw_data_dane <- drive_get("https://docs.google.com/spreadsheets/d/1FuvujfVA67WrZb7mTxvMYCRv2rrNwBhltr7IzBIvITk/edit#gid=773188988") %>% 
+  read_sheet(range = "emcm_real!A1:R199")
 ```
 
-## Limpiando y posicionando la informaci
+## Limpiando y posicionando la información Champion
 
-```{r }
-#Lectura de datos y cambio de nombre a formato más deseable
-data <- read_csv2("table.csv")
-dates_vector <- as.character(dmy(names(data)[c(-1,-2)]))
-names(data)[c(-1,-2)] = dates_vector
-
-#Construyendo DF con 75 SKU en tidy data
-agrupado <- data[1:75,] %>% 
+```{r}
+#Construyendo DF en tidy data
+sku_data <- raw_data %>% 
   replace(., is.na(.), 0) %>% 
-  gather(date, valor, -codigo, -descripcion) %>%
-  mutate(date = ymd(date)) %>% 
-  arrange(codigo) %>% 
-  write_csv("agrupado.csv")
-
-#Identificando productos con mayor demanda
-agrupado %>% group_by(codigo) %>% 
-  summarize(demanda_anual = sum(valor, na.rm = T)) %>%
-  arrange(desc(demanda_anual))
+  gather(date, value, -codigo) %>%
+  mutate(date = dmy(date)) %>% 
+  arrange(codigo)
 
 #Construyendo modelo lineal con tendencia y estacionalidad para los 75 SKU seleccionados
-
-agrupado_tsibble <- agrupado %>%
+sku_ts <- sku_data %>%
   mutate(date = yearmonth(date)) %>% 
-  as_tsibble(key = id(codigo), index = date)
+  as_tsibble(key = codigo, index = date)
 
-champion_fitted <-  agrupado_tsibble %>%  
+#Train data champion
+sku_train <- sku_ts %>% 
+  filter(date <= yearmonth("2019 mar."))
+
+dane_ts <- raw_data_dane %>% 
+  mutate(fecha = dmy(fecha),
+         fecha = yearmonth(fecha)) %>% 
+  gather(key = serie, value = "value", -fecha) %>% 
+  as_tsibble(index = fecha, key = serie)
+
+#Gr?fica de todas las series
+dane_ts %>% 
+  autoplot(color = "black") +
+  facet_wrap(~serie, scales = "free_y")
+
+dane_train <- dane_ts %>% 
+  filter(fecha < dmy("01-06-2018"))
+```
+
+#Modelamiento Champion
+
+```{r}
+model_fitted <-  sku_train %>%  
   model(
-    "Global con indicadoras" = TSLM(valor ~ trend() + season()),
-    Arima = ARIMA(valor),
-    "Suavizamientos exponenciales" = ETS(box_cox(valor, 0.3))
+    "Global con indicadoras" = TSLM(value ~ trend() + season()),
+    Arima = ARIMA(value),
+    "Suavizamientos exponenciales" = ETS(box_cox(value, 0.3)),
+    Promedio = MEAN(value)
   )
 
 #Enviando a .csv los resultados de ajuste del modelo
-champion_ajuste <- champion_fitted %>% 
-  augment(model) %>% 
-  write_csv("champion_ajuste.csv")
+model_ajuste <- model_fitted %>% 
+  augment()
+model_ajuste %>% 
+  write_csv("model_ajuste.csv")
 
 #Enviando a .csv los indicadores de ajuste
-champion_indicadores <- champion_fitted %>% 
-  glance(model) %>% 
-  write_csv("champion_indicadores.csv")
+model_indicadores <- model_fitted %>% 
+  glance()
+model_indicadores %>% 
+write_csv("model_indicadores.csv")
 
-#enviando a .csv las predicciones a 12 meses
-champion_predicciones <- champion_fitted %>% 
-  forecast(h = 12) %>% 
-  write_csv("champion_predicciones.csv")
+#Predicciones a 12 meses
+model_forecast <- model_fitted %>% 
+  forecast(h = "1 year")
 
+model_forecast %>% 
+  write_csv("model_forecast.csv")
+```
 
+#Modelamiento DANE
+
+```{r}
+dane_fit <-  dane_train %>%  
+  model(
+    "Global con indicadoras" = TSLM(value ~ trend() + season()),
+    Arima = ARIMA(value),
+    "Suavizamientos exponenciales" = ETS(box_cox(value, 0.3)),
+    Promedio = MEAN(value)
+  )
+
+dane_forecast <- dane_fit %>% 
+  forecast(h = "2 years")
+```
+
+# Plotting Champion
+```{r}
+model_forecast
 #Método autoplot para SKU específico
-champion_predicciones %>% 
-  filter(codigo == 18209) %>% 
-autoplot(filter(agrupado_tsibble, year(date) >= 2016),level = NULL)
+model_forecast %>% 
+  filter(codigo == 18404) %>% 
+autoplot(filter(sku_ts, year(date) >= 2016),level = NULL)
 
 #Autoplot de serie + predicciones dependientes únicamente de la página
-library(ggforce)
-champion_predicciones %>% 
-  autoplot(filter(agrupado_tsibble, year(date) >= 2016),level = NULL) +
-  facet_wrap_paginate(~codigo, ncol = 2, nrow = 2, scales = "free_y", page = 3) +
+
+model_forecast %>% 
+  autoplot(filter(sku_ts, year(date) >= 2016),level = NULL) +
+  facet_wrap_paginate(~codigo, ncol = 2, nrow = 4, scales = "free_y", page = 3) +
   theme_bw() +
   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) 
 
-#Creando versiones en factor de agrupado
-agrupado_factor <- agrupado_tsibble %>% 
+#Creando versiones en factor de sku_data
+sku_data_factor <- sku_ts %>% 
   mutate(codigo = as.factor(codigo))
 
 #Creando una gráfica que contiene todas las series en un frame 3x5
-ggplot(agrupado_factor, aes(x = date, y = valor)) +
+ggplot(sku_data_factor, aes(x = date, y = valor)) +
 geom_line() +
   facet_wrap_paginate(~codigo, ncol = 3, nrow = 5, scales = "free_y", page = 5)
 ```
+
+# Plotting DANE y resultados de accuracy
+```{r}
+dane_forecast %>% 
+  autoplot(filter(dane_ts, fecha >= yearmonth("2015-01-01")),level = NULL) +
+  geom_point(size = 0.8) +
+  facet_wrap_paginate(~serie, ncol = 1, nrow = 2, scales = "free_y", page = 3) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+  labs(title = "Índice empalmado de ventas reales al por menor", 
+       subtitle = "Datos obtenidos de: Encuesta Mensual de Comercio al por Menor (EMCM)", 
+       color = "Modelo")
+
+ggsave("plots3.pdf", units = "cm", width = 20, height = 12)
+
+accuracy(dane_forecast, data = dane_ts) %>% 
+  write_excel_csv2("accuracy_dane.csv")
+```
+
+
