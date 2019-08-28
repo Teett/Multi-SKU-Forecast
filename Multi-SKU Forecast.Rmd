@@ -77,11 +77,25 @@ dane_ts <- raw_data_dane %>%
   gather(key = serie, value = "value", -fecha) %>% 
   as_tsibble(index = fecha, key = serie)
 
-#Gr?fica de todas las series
-dane_ts %>% 
-  autoplot(color = "black") +
-  facet_wrap(~serie, scales = "free_y", nrow = 6, ncol = 3) +
-  theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 0.8))
+#Gráfica de todas las series
+dane_10 <- dane_ts %>%
+  filter(serie != "Artículos de ferretería y pinturas" &
+         serie != "Total Comercio Minorista sin Combustibles" &
+         serie != "Total Comercio Minorista sin Combustibles ni Vehículos" &
+         serie != "Calzado, artículos de cuero y sucedáneos del cuero" & 
+         serie != "Artículos y utensilios de uso doméstico" &
+         serie != "Otras mercancías para uso personal o doméstico, no especificadas anteriormente" &
+         serie != "Productos de aseo personal, cosméticos y perfumería")
+
+dane_10 %>% 
+  autoplot() +
+  facet_wrap(~serie, scales = "free", nrow = 5, ncol = 2) +
+  theme(legend.position = "none") +
+  labs(y = "Valor (Puntos)",
+       x = "Fecha - frecuencia mensual",
+       title = "Índice empalmado de ventas reales al por menor",
+       subtitle = "Datos obtenidos de: Encuesta Mensual de Comercio al por Menor (EMCM)")
+ggsave("series_dane_graficas.png", units = "cm", width = 16, height = 23)
 
 dane_train <- dane_ts %>% 
   filter(fecha < dmy("01-05-2018"))
