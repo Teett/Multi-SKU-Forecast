@@ -99,6 +99,9 @@ ggsave("series_dane_graficas.png", units = "cm", width = 16, height = 23)
 
 dane_train <- dane_ts %>% 
   filter(fecha < dmy("01-05-2018"))
+
+dane_10_train <- dane_10 %>% 
+  filter(fecha < yearmonth("2018 jun"))
 ```
 
 #Modelamiento Champion
@@ -146,9 +149,26 @@ dane_fit <-  dane_train %>%
 
 dane_forecast <- dane_fit %>% 
   forecast(h = 24)
-
 dane_forecast %>% 
   write_csv("forecast_data.csv")
+```
+
+##Dane 10 fit & forecast
+```{r}
+dane_10_fit <-  dane_10_train %>%  
+  model(
+    "Global con variables indicadoras" = TSLM(value ~ trend() + season()),
+    Arima = ARIMA(value),
+    "Suavizamientos exponenciales" = ETS(value),
+    NNETAR = NNETAR(value),
+    Deriva = RW(value ~ drift())
+  )
+
+dane_10_forecast <- dane_10_fit %>% 
+  forecast(h = 24)
+
+dane_10_forecast %>% 
+  write_csv("forecast_10_data.csv")
 ```
 
 # Plotting Champion
@@ -195,6 +215,25 @@ ggsave("plots5.pdf", units = "cm", width = 20, height = 27)
 
 accuracy(dane_forecast, data = dane_ts) %>% 
   write_excel_csv("accuracy_dane.csv")
+```
+
+##accuracy y plots de Dane10
+```{r}
+dane_10_forecast %>% 
+  autoplot(filter(dane_10, fecha >= yearmonth("2015-01-01")),level = NULL) +
+  geom_point(size = 0.8) +
+  facet_wrap(~serie, scales = "free", nrow = 5, ncol = 2) +
+  theme(legend.position = "top") +
+  labs(title = "Pronósticos sobre el Índice empalmado de ventas reales al por menor", 
+       subtitle = "Datos obtenidos de: Encuesta Mensual de Comercio al por Menor (EMCM)", 
+       color = "Modelo",
+       x = "Tiempo (Frecuencia Mensual)",
+       y = "Valor del índice (Puntos)")
+
+ggsave("forecast_10.png", units = "cm", width = 20, height = 23)
+
+accuracy(dane_10_forecast, data = dane_10) %>% 
+  write_excel_csv("accuracy_dane_10.csv")
 ```
 
 
