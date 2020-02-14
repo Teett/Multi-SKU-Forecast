@@ -1,0 +1,151 @@
+---
+title: "Reporte Multi-SKU"
+author: "Daniel"
+date: "13/2/2020"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reporte automatizado - MultiSKU
+
+```{r, warning = FALSE, results = 'hide', message = FALSE}
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(fable)
+library(broom)
+library(googledrive)
+library(googlesheets4)
+library(ggforce)
+library(readxl)
+library(writexl)
+```
+
+```{r, echo = FALSE, include=FALSE}
+raw_data_dane <- read_excel("EMCM_Serie_indices_nal_empalmada_jun19.xls", range = "1.2!C7:T205")
+```
+
+```{r, echo = FALSE}
+dane_ts <- raw_data_dane %>% 
+  mutate(fecha = yearmonth((fecha))) %>% 
+  gather(key = serie, value = "value", -fecha) %>% 
+  as_tsibble(index = fecha, key = serie, regular = TRUE)
+
+#Gráfica de todas las series
+dane_10 <- dane_ts %>%
+  filter(serie != "Artículos de ferretería y pinturas" &
+         serie != "Total Comercio Minorista sin Combustibles" &
+         serie != "Total Comercio Minorista sin Combustibles ni Vehículos" &
+         serie != "Calzado, artículos de cuero y sucedáneos del cuero" & 
+         serie != "Artículos y utensilios de uso doméstico" &
+         serie != "Otras mercancías para uso personal o doméstico, no especificadas anteriormente" &
+         serie != "Productos de aseo personal, cosméticos y perfumería")
+
+dane_10 %>% 
+  autoplot() +
+  facet_wrap(~serie, scales = "free", nrow = 8, ncol = 2) +
+  theme(legend.position = "none") +
+  labs(y = "Valor (Puntos)",
+       x = "Fecha - frecuencia mensual",
+       title = "Índice empalmado de ventas reales al por menor",
+       subtitle = "Datos obtenidos de: Encuesta Mensual de Comercio al por Menor (EMCM)")
+
+dane_10_train <- dane_10 %>%
+  filter(fecha < yearmonth("2018 jun"))
+```
+
+# Pronósticos 
+
+```{r, echo = FALSE}
+dane_10_fit <-  dane_10_train %>%  
+  model(
+    "Global con variables indicadoras" = TSLM(value ~ trend() + season()),
+    Arima = ARIMA(value),
+    "Suavizamientos exponenciales" = ETS(value),
+    #NNETAR = NNETAR(value),
+    Deriva = RW(value ~ drift())
+  )
+
+dane_10_forecast <- dane_10_fit %>% 
+  forecast(h = 24)
+```
+
+# Resultados
+
+```{r, echo = FALSE}
+dane_10_forecast %>% 
+  autoplot(filter(dane_10, fecha >= yearmonth("2015-01-01")),level = NULL) +
+  geom_point(size = 0.8) +
+  facet_wrap(~serie, scales = "free_x", nrow = 5, ncol = 2) +
+  theme(legend.position = "top") +
+  labs(title = "Pronósticos sobre el Índice empalmado de ventas reales al por menor", 
+       subtitle = "Datos obtenidos de: Encuesta Mensual de Comercio al por Menor (EMCM)", 
+       color = "Modelo",
+       x = "Tiempo (Frecuencia Mensual)",
+       y = "Valor del índice (Puntos)")
+
+dane_10_accuracy <- accuracy(dane_10_forecast, data = dane_10)
+
+dane_10_accuracy %>% 
+  group_by(serie) %>% 
+  filter(MAPE == min(MAPE)) %>% 
+  ggplot(aes(x = reorder(serie, -MAPE), y = MAPE, fill = .model)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.2f", round(MAPE, digits = 2))), hjust = -0.05, size = 3) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_bw()+
+  theme(legend.position = "top") +
+  labs(title = "Mejores modelos de acuerdo al MAPE",
+       subtitle = "Nota: Se incluye únicamente el modelo con menor MAPE para cada serie",
+       fill = "Modelos",
+       x = NULL,
+       y = "Error Porcentual Absoluto Medio (MAPE)")
+
+dane_10_accuracy %>% 
+  group_by(serie) %>% 
+  filter(.model == "Deriva") %>% 
+  ggplot(aes(x = reorder(serie, -MAPE), y = MAPE, fill = .model)) +
+  geom_bar(stat = "identity", fill = "#B2182B") +
+  geom_text(aes(label = sprintf("%0.2f", round(MAPE, digits = 2))), hjust = -0.05, size = 3) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_bw()+
+  theme(legend.position = "top") +
+  labs(title = "MAPE utilizando la Deriva como método de pronóstico",
+       x = NULL,
+       y = "Error Porcentual Absoluto Medio (MAPE)")
+```
+
+# Tablas de medidas de error
+
+```{r, echo = FALSE}
+dane_10_accuracy <- read_csv("accuracy_dane_10.csv")
+
+deriva_MAPE <- dane_10_accuracy %>% 
+  group_by(serie) %>% 
+  filter(.model == "Deriva")
+
+ok_MAPE <- dane_10_accuracy %>% 
+  group_by(serie) %>% 
+  filter(MAPE == min(MAPE)) %>% 
+  summarize(MAPE = MAPE)
+
+tabla_comparativa <- full_join(ok_MAPE, deriva_MAPE) %>% 
+  select(1:3) %>% 
+  mutate(.model = case_when(is.na(.model) ~ "ok",
+                            !is.na(.model)~ "deriva")) %>% 
+  spread(key = .model, value = MAPE) %>% 
+  mutate(mejora = ((deriva - ok)/deriva) *100)
+
+tabla_comparativa
+
+tabla_comparativa %>% 
+  summarize(mejora_prom = mean(mejora))
+```
+
